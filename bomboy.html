@@ -1,0 +1,785 @@
+﻿<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html>
+    <head>
+        <title>Bomb boy Original v1</title>
+        <meta http-equiv="content-type" content="text/html;charset=utf-8" />
+        <style type="text/css">
+        <!--
+        div {
+            border:1px dotted black;
+            position:relative;
+            width:280px;
+            height:208px;
+        }
+        -->
+        </style>
+    </head>
+    <body onload="javascript:main();">
+        <div><canvas width="280" height="208">Please user IE9+,FF4+,Chrome</canvas></div>
+        <span>Arrows to move, SPACE to locate bomb</span>
+    </body>
+
+    <script type="text/javascript" src="js/foundation.js"></script>
+    <script type="text/javascript" src="js/resource.js"></script>
+    <script type="text/javascript">
+    var canvas,canvasWidth, canvasHeight;
+    var g;
+    var offsetX=0;
+
+    var CellXCount=29;
+    var CellYCount=13;
+    var CellWidth=16;
+
+    var field=[];
+    field.byCoordinate=function(x,y){ return this[parseInt(y/CellWidth)][parseInt(x/CellWidth)]; };
+    field.refresh=function(){
+        this.each(function(ri,r){
+            r.each(function(ci,c){
+                c.refresh();
+            });
+        });
+    };
+    field.eachBox=function(f){
+        this.each(function(ri,r){
+            r.each(function(ci,c){
+                f(ri,ci,c);
+            });
+        });
+    };
+    
+    var bombz=[];
+
+    var boy;
+    var creaturez=[];
+    creaturez.refresh=function(){ this.each(function(i,el){ el.refresh(); }); };
+    creaturez.paint=function(graphics){ this.each(function(i,el){ el.paint(graphics); }); };
+
+    var GraphicsStatus={ frmCnt:0,duration:0,FPS:0 };
+
+
+    var Box=function(col,row){};
+    Box.prototype.init=function(col,row){
+        this.column=col;
+        this.row=row;
+        this.x=this.column*CellWidth,this.y=this.row*CellWidth;
+    };
+    Box.prototype.free=function(creature){ return false; };
+    Box.prototype.plant=function(sth){};
+    Box.prototype.paint=function(g){};
+    Box.prototype.refresh=function(){};
+    Box.prototype.sibling=function(d){
+        switch(d){
+            case 0:
+            return field[this.row-1][this.column];
+            case 1:
+            return field[this.row][this.column+1];
+            case 2:
+            return field[this.row+1][this.column];
+            case 3:
+            return field[this.row][this.column-1];
+        }
+    };
+    Box.prototype.eachSibling=function(f){
+        var sn=[0,1,2,3];
+
+        while(sn.length>0){
+            var i=parseInt(Math.random()*sn.length);
+            f(sn[i],this.sibling(sn[i]));
+            sn.splice(i,1);
+        }
+    };
+    Box.prototype.onFire=function(){
+        return this.sth!=null&&this.sth instanceof Fire;
+    };
+    Box.prototype.toString=function(){
+        return '('+this.column+','+this.row+')';
+    };
+
+    var Stake=function(col,row){
+        this.init(col,row);
+    }.extend(Box);
+    Stake.prototype.paint=function(g){
+        g.drawImage(Imgz.stun,this.x,this.y);
+    };
+    
+    var Ground=function(x,y){
+        this.init(x,y);
+        this.sth=null;
+        this.bonus=null;
+    }.extend(Box);
+    Ground.prototype.free=function(creature){
+        return (this.sth==null||!(this.sth instanceof Bomb));
+    };
+    Ground.prototype.plant=function(newStuff){
+        var plantIt=true;
+
+        if(newStuff instanceof Fire){
+            if(newStuff.d!=4&&this.sth!=null&&this.sth instanceof Bomb){
+                plantIt=false;
+                this.sth.delayExplode(3);
+            } else if(newStuff.d!=4&&this.sth!=null&&this.sth instanceof Fire){
+                plantIt=false;
+            } else {
+                if(newStuff.d!=4&&newStuff.power>1){
+                    this.sibling(newStuff.d).plant(newStuff.fire());
+                }
+
+                if(this.bonus!=null){
+                    this.bonus=null;
+                    var newCreature;
+                    for(var i=0;i<3;i++){
+                        newCreature=new Balloon(this.column,this.row);
+                        newCreature.immune=newStuff.bomb;
+                        creaturez.push(newCreature);
+                    }
+                }
+            }
+        }
+
+        if(plantIt==true){
+            this.sth=newStuff;
+            this.sth.box=this;
+        }
+    };
+    Ground.prototype.refresh=function(){
+        if(this.sth!=null){
+            this.sth.refresh();
+        }
+    };
+    Ground.prototype.paint=function(g){
+        g.save();
+        g.setTransform(1,0,0,1,this.x-offsetX,this.y);
+
+        if(this.sth!=null){
+            this.sth.paint(g);
+        } else if(this.bonus!=null){
+            this.bonus.paint(g);
+        }
+
+        g.restore();
+    };
+
+    var Wall=function(x,y){
+        this.init(x,y);
+        this.initAnimator(3,6);
+        this.burning=false;
+        this.burningTime=18;
+
+        this.bonus=PowerUp;
+    }.extend(Box).extend(Animator);
+    Wall.prototype.onFire=function(){
+        return this.burning;
+    };
+    Wall.prototype.free=function(creature){
+        return creature.ghost;
+    };
+    Wall.prototype.plant=function(sth){
+        if(sth instanceof Fire){
+            this.burning=true;
+            this.sth=sth;
+        }
+    };
+    Wall.prototype.destroy=function(){
+        var newGround=new Ground(this.column,this.row);
+        newGround.bonus=this.bonus;
+        field[this.row][this.column]=newGround;
+    };
+    Wall.prototype.refresh=function(){
+        if(this.burning==true){
+            this.go();
+            if(--this.burningTime==0){
+                this.destroy();
+            }
+        }
+    };
+    Wall.prototype.paint=function(g){
+        var img;
+        if(!this.burning) img=Imgz['wall'];
+        else {
+            img=Imgz['wall_'+this.aniConfig.frameCount];
+        }
+
+        g.drawImage(img,this.x,this.y);
+    };
+
+    var Bomb=function(power,owner){
+        this.box=null;
+
+        this.owner=owner;
+        this.power=(power==null?1:power);
+
+        this.initAnimator(8,4);
+        this.clock=96;
+        this.destroyed=false;
+    }.extend(Animator);
+    Bomb.prototype.refresh=function(){
+        this.go();
+        if(this.clock>0) this.clock--;
+    };
+    Bomb.prototype.explode=function(){
+        if(this.destroyed==false){
+            this.box.plant(this.fire(4));
+            this.box.sibling(0).plant(this.fire(0));
+            this.box.sibling(1).plant(this.fire(1));
+            this.box.sibling(2).plant(this.fire(2));
+            this.box.sibling(3).plant(this.fire(3));
+            this.destroyed=true;
+
+            this.owner.bomb++;
+        }
+    };
+    Bomb.prototype.delayExplode=function(delay){
+        this.clock=delay;
+    };
+    Bomb.prototype.paint=function(g){
+        g.drawImage(Imgz['bomb_'+this.aniConfig.frameCount],0,0);
+    };
+    Bomb.prototype.fire=function(d){
+        return new Fire(d,this.power,this);
+    };
+
+    var Fire=function(d,power,b){
+        this.d=d;
+        this.power=power;
+        this.box=null;
+        this.clock=21;
+        this.bomb=b;
+
+        this.initAnimator(3,7);
+    }.extend(Animator);
+    Fire.prototype.refresh=function(){
+        this.go();
+        if(--this.clock==0){
+            this.box.sth=null;
+        }
+    };
+    Fire.prototype.fire=function(){
+        return new Fire(this.d,this.power-1,this.bomb);
+    };
+    Fire.prototype.paint=function(g){
+        var img;
+        if(this.d!=4&&this.power>1){
+            img=Imgz['flame_'+this.d+'_'+this.aniConfig.frameCount+'m'];
+        }else{
+            img=Imgz['flame_'+this.d+'_'+this.aniConfig.frameCount];
+        }
+
+        g.drawImage(img,0,0);
+    };
+
+    var PowerUp={
+        paint:function(g){ g.drawImage(Imgz['PowerUp'],0,0); },
+        upgrade:function(boy){ boy.power++; }
+    };
+    var PocketUp={
+        paint:function(g){ g.drawImage(Imgz['PocketUp'],0,0); },
+        upgrade:function(boy){ boy.bomb++; }
+    };
+    var SpeedUp={
+        paint:function(g){ g.drawImage(Imgz['SpeedUp'],0,0); },
+        upgrade:function(boy){ boy.velocity+=0.25; }
+    };
+    var BeGhost={
+        paint:function(g){ g.drawImage(Imgz['Ghost'],0,0); },
+        upgrade:function(boy){ boy.ghost=true; }
+    };
+    
+    
+    var Creature=function(col,row){};
+    Creature.prototype.initCreature=function(col,row){
+        this.x=col*CellWidth;
+        this.y=row*CellWidth;
+        this.face2=1;
+        this.velocity=1;
+        this.inMove=false;
+        this.ghost=false;
+        
+        this.dy=0;
+        this.dx=0;
+    };
+    Creature.prototype.faceTo=function(d){ this.face2=d; };
+    Creature.prototype.move=function(){ this.inMove=true; };
+    Creature.prototype.halt=function(){ this.inMove=false; };
+    Creature.prototype.at=function(){
+        var f=field.byCoordinate(this.x,this.y);
+        if((this.x-f.x)*2>CellWidth) return f.sibling(1);
+        else if((this.y-f.y)*2>CellWidth) return f.sibling(2);
+        return f;
+    };
+    Creature.prototype.paint=function(g){};
+    Creature.prototype.refresh=function(){};
+    Creature.prototype.step=function(){
+        if(this.inMove==true&&!this.block()){
+            var txy;
+            switch(this.face2){
+                case 0:
+                var d=-this.velocity+this.dy;
+                var dInt=Math.ceil(d);
+                this.dy=d-dInt;
+                for(var i=0;i>dInt;i--){
+                    this.y--;
+                    if(this.block()) break;
+                }
+                break;
+
+                case 1:
+                var d=this.velocity+this.dx;
+                var dInt=Math.floor(d);
+                this.dx=d-dInt;
+                for(var i=0;i<dInt;i++){
+                    this.x++;
+                    if(this.block()) break;
+                }
+                break;
+
+                case 2:
+                var d=this.velocity+this.dy;
+                var dInt=Math.floor(d);
+                this.dy=d-dInt;
+                for(var i=0;i<dInt;i++){
+                    this.y++;
+                    if(this.block()) break;
+                }
+                break;
+
+                case 3:
+                var d=-this.velocity+this.dx;
+                var dInt=Math.ceil(d);
+                this.dx=d-dInt;
+                for(var i=0;i>dInt;i--){
+                    this.x--;
+                    if(this.block()) break;
+                }
+                break;
+            }
+            return true;
+        }
+        return false;
+    };
+    Creature.prototype.block=function(){
+        var l1=CellWidth-1;
+        var f1,f2,fc1,fc2;
+        switch(this.face2){
+            case 0:
+            f1=field.byCoordinate(this.x,this.y-1);
+            f2=field.byCoordinate(this.x+l1,this.y-1);
+            fc1=field.byCoordinate(this.x,this.y);
+            fc2=field.byCoordinate(this.x+l1,this.y);
+            break;
+
+            case 1:
+            f1=field.byCoordinate(this.x+l1+1,this.y);
+            f2=field.byCoordinate(this.x+l1+1,this.y+l1);
+            fc1=field.byCoordinate(this.x+l1,this.y);
+            fc2=field.byCoordinate(this.x+l1,this.y+l1);
+            break;
+
+            case 2:
+            f1=field.byCoordinate(this.x,this.y+l1+1);
+            f2=field.byCoordinate(this.x+l1,this.y+l1+1);
+            fc1=field.byCoordinate(this.x,this.y+l1);
+            fc2=field.byCoordinate(this.x+l1,this.y+l1);
+            break;
+
+            case 3:
+            f1=field.byCoordinate(this.x-1,this.y);
+            f2=field.byCoordinate(this.x-1,this.y+l1);
+            fc1=field.byCoordinate(this.x,this.y);
+            fc2=field.byCoordinate(this.x,this.y+l1);
+            break;
+        }
+        return (f1!=fc1&&f2!=fc2)&&(!f1.free(this)||!f2.free(this));
+    };
+
+    var Monster=function(col,row){
+        this.initMonster();
+    }.extend(Creature).extend(Animator);
+    Monster.prototype.initMonster=function(col,row){
+        this.initCreature(col,row);
+        this.initAnimator(8,4);
+
+        this.inMove=true;
+        this.velocity=0.5;
+        this.faceTo(parseInt(Math.random()*4));
+
+		this.immune=null;
+        this.dying=false;
+    };
+    Monster.prototype.model=function(){ return 0; };
+    Monster.prototype.paint=function(g){
+        var img;
+        var model=this.model();
+		g.save();
+
+		g.transform(1,0,0,1,this.x,this.y);
+        if(this.dying==true){
+            if(this.aniConfig.frameCount<3) img=Imgz['creature_'+model+'_d'];
+            else img=Imgz['creature_dead_'+(this.aniConfig.frameCount-2)];
+        } else {
+			if(this.face2==3) g.transform(-1,0,0,1,CellWidth,0);
+            img=Imgz['creature_'+model+'_'+this.aniConfig.frameCount];
+        }
+
+        g.drawImage(img,0,0);
+		g.restore();
+    };
+    Monster.prototype.refresh=function(){};
+    Monster.prototype.killed=function(){
+        this.dying=true;
+        this.inMove=false;
+        this.initAnimator(22,7,false);
+    };
+    Monster.prototype.isDead=function(){
+        return this.dying==true&&this.aniConfig.end==true;
+    };
+
+    var Balloon=function(col,row){
+        this.initMonster(col,row);
+    }.extend(Monster);
+    Balloon.prototype.model=function(){ return 1; };
+    Balloon.prototype.refresh=function(){
+        this.go();
+        if(this.dying!=true&&this.inMove==true&&!this.step()){
+            this.faceTo( parseInt(Math.random()*4) );
+        }
+    };
+
+    var Liquid=function(col,row){
+        this.initMonster(col,row);
+        this.initAnimator(20,4);
+        this.velocity=0.4;
+        this.ghost=false;
+
+        this.memory={target:null,path:null};
+    }.extend(Monster);
+    Liquid.prototype.model=function(){ return 5; };
+    Liquid.prototype.move2box=function(box){
+        this.inMove=false;
+        var prevD=this.face2;
+        if(this.x!=box.x){
+            this.faceTo(this.x>box.x?3:1);
+            this.inMove=true;
+        } else if(this.y!=box.y) {
+            this.faceTo(this.y>box.y?0:2);
+            this.inMove=true;
+        }
+
+        if(Math.abs(prevD-this.face2)==2) return true;
+        else this.step();
+
+        return this.x==box.x&&this.y==box.y;
+    };
+    Liquid.prototype.refresh=function(){
+        this.go();
+        if(this.dying==true) return;
+
+        var destBox=boy.at();
+        if(this.memory.target!=destBox){
+            
+            this.memory.target=destBox;
+            
+            window.setTimeout(function(){
+                this.memory.path=this.findPath(destBox);
+            }.delegate(this),0);
+        }
+
+        if(this.memory.path!=null&&this.memory.path.length>0){
+        
+            if(this.move2box(this.memory.path[this.memory.path.length-1].box)){
+                this.memory.path.pop();
+            }
+        }
+    };
+    
+    Liquid.prototype.findPath=function(box){
+        var dest=box;
+        var scorePath=function(test){
+            return Math.abs(test.column-dest.column)+Math.abs(test.row-dest.row);
+/*
+            var xDistance=Math.abs(test.column-dest.column);
+            var yDistance=Math.abs(test.row-dest.row);
+            if(xDistance>yDistance)
+                return 14*yDistance+10*(xDistance-yDistance);
+            else
+                return 14*xDistance+10*(yDistance-xDistance);
+*/
+        };
+
+        var openPool=new LinkedList();
+        openPool.find=function(testBox){
+            var found=null;
+            this.each(function(i,e){
+                if(e.box==testBox){
+                    found=e;
+                    return false;
+                }
+            });
+            return found;
+        };
+        var current=openPool.add({G:0,H:0,box:this.at()});
+
+        var closePool=[];
+        closePool.exist=function(testBox){
+            var exist=false;
+            this.each(function(i,e){
+                if(e.box==testBox) {
+                    exist=true;
+                    return false;
+                }
+            });
+            return exist;
+        };
+
+        while(current!=null&&current.box!=dest){
+            closePool.push(current);
+            openPool.remove(current);
+
+            current.box.eachSibling(function(d,b){
+                if(b.free(this)&&!closePool.exist(b)){
+                    var tmp={G:current.G+1,H:current.G+1+scorePath(b),box:b,parent:current};
+                    var fnd;
+                    if((fnd=openPool.find(b))!=null){
+                        if(fnd.G>tmp.G){
+                            fnd.G=tmp.G;
+                            fnd.H=tmp.H;
+                            fnd.parent=current;
+                        }
+                    }else{
+                        openPool.add(tmp);
+                    }
+                }
+            }.delegate(this));
+
+            var minG=null;
+            openPool.each(function(i,e){
+                if(minG==null||minG.H>e.minG){
+                    minG=e;
+                }
+            });
+            current=minG;
+        }
+
+        // Assemble Path
+        var path=[];
+        while(current!=null){
+            path.push(current);
+            current=current.parent;
+        }
+
+        return path;
+    };
+
+
+    var Boy=function(col,row){
+        this.initCreature(col,row);
+        this.initAnimator(5,4);
+
+        this.power=1;
+        this.bomb=1;
+    }.extend(Creature).extend(Animator);
+    Boy.prototype.allocBomb=function(){
+        if(this.bomb>0){
+            this.bomb--;
+            return new Bomb(this.power,this);
+        }
+        else return null;
+    };
+
+    Boy.prototype.moonWalk=function(){
+        var error=6;
+        var atX=parseInt(this.x/CellWidth);
+        var atY=parseInt(this.y/CellWidth);
+
+        var t;
+        var f=field[atY][atX];
+        if(this.face2==1||this.face2==3){
+            if((t=this.y-f.y)>0&&t<error){
+                this.y=f.y;
+            } else if((t=f.y+CellWidth-this.y)>0&&t<error){
+                f=field[atY+1][atX];
+                this.y=f.y;
+            }
+        }else{
+            if((t=this.x-f.x)>0&&t<error){
+                this.x=f.x;
+            } else if((t=f.x+CellWidth-this.x)>0&&t<error){
+                f=field[atY][atX+1];
+                this.x=f.x;
+            }
+        }
+    };
+    Boy.prototype.refresh=function(){
+        if(this.inMove==true){
+            this.moonWalk();
+            this.go();
+
+            if(this.step()){
+
+                var nf;                
+                if((nf=this.at())!=null&&nf instanceof Ground&&nf.bonus!=null){
+                    nf.bonus.upgrade(this);
+                    nf.bonus=null;
+                }
+
+                /* Move canvas */
+                var t;
+                if(this.face2==1){
+                    if((t=this.x-canvas.clientWidth+100)>offsetX){
+                        offsetX=Math.min(t,CellWidth*CellXCount-canvas.clientWidth);
+                    }
+                } else if(this.face2==3){
+                    if((t=this.x-100)<offsetX){
+                        offsetX=Math.max(t,0);
+                    }
+                }
+            }
+        }
+    };
+    Boy.prototype.paint=function(g){
+        var im=Imgz['boy_'+this.face2+'_'+this.currentFrame()];
+        g.drawImage(im,this.x,this.y);
+    };
+    Boy.prototype.armorUp=function(){
+        this.bomb=5;
+        this.power=7;
+    };
+
+    function main(){
+        canvas=document.getElementsByTagName('canvas')[0];
+        g=canvas.getContext('2d');
+        canvasWidth=canvas.clientWidth;
+        canvasHeight=canvas.clientHeight;
+
+        init();
+
+        var key=new KeyListener({
+            listener:function(keyCode){
+                switch(keyCode){
+                    case -1:
+                    boy.halt();
+                    break;
+
+                    case 37: case 38: case 39: case 40:
+                    var tk;
+                    boy.faceTo( (tk=keyCode-38)<0?3:tk );
+                    boy.move();
+                    break;
+
+                    case 32:
+                    var b;
+                    var f=boy.at();
+                    if(f instanceof Ground&&f.sth==null&&(b=boy.allocBomb())!=null){
+                        bombz.push(b);
+                        boy.at().plant(b);
+                    }
+                    break;
+                }
+            }
+        });
+
+        var GodTimer=new Animation({
+            delay:20,
+            listeners:{
+                Run:refresh
+            }
+        });
+        GodTimer.start();
+    };
+
+    function init(){
+        for(var y=0;y<CellYCount;y++){
+            var fieldLine=[];
+            for(var x=0;x<CellXCount;x++){
+                if(y==0||y==CellYCount-1||x==0||x==CellXCount-1||
+                   (y%2==0&&x%2==0))
+                {
+                    fieldLine.push(new Stake(x,y));
+                } else if(!(x==1&&y==1) && !(x==1&&y==2) && !(x==2&&y==1) && Math.round(Math.random())==0){
+                    fieldLine.push(new Wall(x,y));
+                } else {
+                    fieldLine.push(new Ground(x,y));
+					
+					if(Math.random()*20<1){
+						creaturez.push(new Balloon(x,y));
+					}
+                }
+            }
+            field.push(fieldLine);
+        }
+
+        boy=new Boy(1,1);
+		boy.bomb=3;
+        //creaturez.push(new Balloon(1,2));
+        creaturez.push(new Liquid(5,5));
+    };
+
+    function refresh(){
+        field.refresh();
+        boy.refresh();
+        creaturez.refresh();
+
+        bombz.each(function(i,el){
+            if(el.clock==0){
+                el.explode();
+            }
+        });
+        
+        creaturez.each(function(i,cr){
+            var box=cr.at();
+            if(cr.dying==false&&box.onFire()&&cr.immune!=box.sth.bomb){
+                cr.killed();
+            }
+        });
+
+
+        bombz.eachBackward(function(i,el){
+            if(el.destroyed==true){
+                bombz.splice(i,1);
+            }
+        });
+
+        creaturez.eachBackward(function(i,cr){
+            if(cr.isDead()){
+                creaturez.splice(i,1);
+            }
+        });
+
+        paint(g);
+    };
+
+    function paint(g){
+        g.save();
+        g.setTransform(1,0,0,1,-offsetX,0);
+
+        g.fillStyle="#50A000";
+        g.fillRect(offsetX,0,400,300);
+
+        field.eachBox(function(row,col,e){
+            e.paint(g);
+        });
+
+        creaturez.paint(g);
+        boy.paint(g);
+        
+        
+        g.restore();
+
+        /* Paint Frame Count */
+        g.save();
+        if(GraphicsStatus.frmCnt==0){
+            GraphicsStatus.duration=new Date().getTime();
+        }
+
+        GraphicsStatus.frmCnt++;
+        if(GraphicsStatus.frmCnt==10){
+            GraphicsStatus.duration=new Date().getTime()-GraphicsStatus.duration;
+            GraphicsStatus.FPS=parseInt(GraphicsStatus.frmCnt/GraphicsStatus.duration*1000);
+            GraphicsStatus.frmCnt=0;
+        }
+
+        g.fillStyle='#000000';
+        g.fillText(GraphicsStatus.FPS,2,10);
+        g.restore();
+    };
+    </script>
+</html>
